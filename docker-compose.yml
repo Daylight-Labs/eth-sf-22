@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:13
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_USER=any_user
+      - POSTGRES_PASSWORD=any_password
+      - POSTGRES_DB=referral-program-eth-sf-22
+    ports:
+      - 5432:5432
+
+  nginx:
+    image: ${NGINX_IMAGE:-bn-api-nginx}
+    build:
+      context: ./nginx
+      target: ${BUILD_TARGET:-dev}
+    ports:
+      - 443:443
+    command: ./run.sh
+    depends_on:
+      - django
+    environment:
+      - DEBUG=1
+      - SECRET_KEY=foo
+      - DJANGO_ALLOWED_HOSTS=*
+      - SQL_ENGINE=django.db.backends.postgresql
+      - SQL_DATABASE=referral-program-eth-sf-22
+      - SQL_USER=any_user
+      - SQL_PASSWORD=any_password
+      - SQL_HOST=db
+      - SQL_PORT=5432
+      - DATABASE=postgres
+      - ENVIRONMENT=dev
+
+  django:
+    image: ${DJANGO_IMAGE:-bn-api-django}
+    build:
+      context: ./django
+      target: ${BUILD_TARGET:-slim}
+    command: ./run.sh
+    volumes:
+      - ./django:/home/django_app/web
+      - ./nginx/static:/home/django_app/web/static
+    ports:
+      - 8000:8000
+    expose:
+      - 8000
+    environment:
+      - DEBUG=1
+      - SECRET_KEY=foo
+      - DJANGO_ALLOWED_HOSTS=*
+      - SQL_ENGINE=django.db.backends.postgresql
+      - SQL_DATABASE=referral-program-eth-sf-22
+      - SQL_USER=any_user
+      - SQL_PASSWORD=any_password
+      - SQL_HOST=db
+      - SQL_PORT=5432
+      - DATABASE=postgres
+      - ENVIRONMENT=dev
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:

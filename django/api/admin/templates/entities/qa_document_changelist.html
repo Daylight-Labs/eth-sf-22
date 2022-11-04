@@ -1,0 +1,9 @@
+{% extends 'admin/change_list.html' %}
+
+{% block object-tools %}
+    <a class="addlink" href="import-csv/">Import CSV</a>
+    <br /> <br/>
+    <a class="addlink" href="update-guild-id/">Update Guild Id</a>
+    <br /> <br/> <br/>
+    {{ block.super }}
+{% endblock %}
