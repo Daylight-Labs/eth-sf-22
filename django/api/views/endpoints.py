@@ -107,30 +107,20 @@ def get_program_state(request):
         days = duration / 86400
 
         thirty_day_mark = first_time + (30 * 86400)
-
-        # avg_balance_raw = None
-        # avg_balance = None
-        # thirty_days_complete = False
-        # if last_time > thirty_day_mark:
-        #     # User has hit 30 day mark
-        #     thirty_days_complete = True
-
-        #     index_of_last_relevant_transaction = None
-        #     for i, t in enumerate(transactions):
-        #         if int(t["timeStamp"]) > thirty_day_mark:
-        #             index_of_last_relevant_transaction = i -1
-        #             break
-            
-        #     avg_balance_raw = (twab_table[index_of_last_relevant_transaction]["twab_amount"] - twab_table[0]["twab_amount"]) / (thirty_day_mark - twab_table[0]["time"])
-        #     avg_balance = avg_balance_raw * 10**-6
-
-        # else:
-        #     # User has not hit 30 day mark
-        #     thirty_days_complete = False
-        #     avg_balance_raw = (twab_table[-1]["twab_amount"] - twab_table[0]["twab_amount"]) / (twab_table[-1]["time"] - twab_table[0]["time"])
-        #     avg_balance = avg_balance_raw * 10**-6
         
-        avg_balance_raw = (twab_table[-1]["twab_amount"] - twab_table[0]["twab_amount"]) / (twab_table[-1]["time"] - twab_table[0]["time"])
+        end_of_reward_transaction_index = None
+        for i, t in enumerate(transactions):
+            if "is_reward_end" in t.keys():
+                end_of_reward_transaction_index = i
+                break
+
+        avg_balance_raw = None
+        if end_of_reward_transaction_index:
+            avg_balance_raw = (twab_table[end_of_reward_transaction_index]["twab_amount"] - twab_table[0]["twab_amount"]) / (twab_table[end_of_reward_transaction_index]["time"] - twab_table[0]["time"])
+        else:
+            avg_balance_raw = (twab_table[-1]["twab_amount"] - twab_table[0]["twab_amount"]) / (twab_table[-1]["time"] - twab_table[0]["time"])
+        
+        
         avg_balance = avg_balance_raw * 10**-6
 
         first_deposit_date = datetime.utcfromtimestamp(first_time)
@@ -139,8 +129,8 @@ def get_program_state(request):
             "wallet": s.wallet,
             "first_deposit_date": first_deposit_date,
             "time_weighted_average_balance": f"{avg_balance}",
-            "reward_earned": f"{avg_balance * 0.05}"
-            # "program_complete": thirty_days_complete
+            "reward_earned": f"{avg_balance * 0.05}",
+            "program_complete": True if end_of_reward_transaction_index else False
         })
 
     if len(ReferralLinkSignup.objects.all()) > 0:
@@ -158,6 +148,16 @@ def make_twab_table(transactions, wallet):
   last_twab_time = 0
   current_balance = 0
   current_time = 0
+
+  thirty_day_mark = int(transactions[0]["timeStamp"]) + (30 * 86400)
+  transactions.append({
+    "timeStamp": f"{thirty_day_mark}",
+    "value":0,
+    "to": "0x",
+    "from": "0x",
+    "is_reward_end": True
+  })
+  transactions.sort(key=get_timestamp)
 
   for transaction in transactions:
     current_time = int(transaction["timeStamp"])
