@@ -8,6 +8,7 @@ from api.models.referral_program import ReferralProgram
 from datetime import datetime
 
 import requests
+import time
 
 @api_view(['GET'])
 def get_referral_link(request, link):
@@ -93,44 +94,54 @@ def get_program_state(request):
     signups = ReferralLinkSignup.objects.all()
 
     for s in signups:
-        url = f"https://api.etherscan.io/api?module=account&action=tokentx&address={s.wallet}&startblock=13259077&endblock=15888321&sort=asc&apikey=IFNIIPV2DX24MAPCWISG97527YQP59T85X&contractaddress=0xdd4d117723C257CEe402285D3aCF218E9A8236E1"
-        response = requests.get(url)
-        transactions = response.json()["result"]
-        transactions.sort(key=get_timestamp)
-        twab_table = make_twab_table(transactions, s.wallet)
+        reload = False
+        if s.twab is None or reload:
+            url = f"https://api.etherscan.io/api?module=account&action=tokentx&address={s.wallet}&startblock=13259077&endblock=15888321&sort=asc&apikey=IFNIIPV2DX24MAPCWISG97527YQP59T85X&contractaddress=0xdd4d117723C257CEe402285D3aCF218E9A8236E1"
+            response = requests.get(url)
+            transactions = response.json()["result"]
+            transactions.sort(key=get_timestamp)
+            twab_table = make_twab_table(transactions, s.wallet)
 
-        # TODO: handle case with only one deposit transaction
-        
-        first_time = twab_table[0]["time"]
-        last_time = twab_table[-1]["time"]
-        duration = (last_time - first_time)
-        days = duration / 86400
+            # TODO: handle case with only one deposit transaction
+            
+            first_time = twab_table[0]["time"]
+            last_time = twab_table[-1]["time"]
+            duration = (last_time - first_time)
+            days = duration / 86400
 
-        thirty_day_mark = first_time + (30 * 86400)
-        
-        end_of_reward_transaction_index = None
-        for i, t in enumerate(transactions):
-            if "is_reward_end" in t.keys():
-                end_of_reward_transaction_index = i
-                break
+            thirty_day_mark = first_time + (30 * 86400)
+            
+            end_of_reward_transaction_index = None
+            for i, t in enumerate(transactions):
+                if "is_reward_end" in t.keys():
+                    end_of_reward_transaction_index = i
+                    break
 
-        avg_balance_raw = None
-        if end_of_reward_transaction_index:
-            avg_balance_raw = (twab_table[end_of_reward_transaction_index]["twab_amount"] - twab_table[0]["twab_amount"]) / (twab_table[end_of_reward_transaction_index]["time"] - twab_table[0]["time"])
-        else:
-            avg_balance_raw = (twab_table[-1]["twab_amount"] - twab_table[0]["twab_amount"]) / (twab_table[-1]["time"] - twab_table[0]["time"])
-        
-        
-        avg_balance = avg_balance_raw * 10**-6
+            avg_balance_raw = None
+            if end_of_reward_transaction_index:
+                avg_balance_raw = (twab_table[end_of_reward_transaction_index]["twab_amount"] - twab_table[0]["twab_amount"]) / (twab_table[end_of_reward_transaction_index]["time"] - twab_table[0]["time"])
+            else:
+                t = time.time()
+                new_twab_amount = twab_table[-1]["twab_amount"] + twab_table[-1]["current_balance"] * (t - twab_table[-1]["time"])
+                avg_balance_raw = (new_twab_amount - twab_table[0]["twab_amount"]) / (t - twab_table[0]["time"]) 
 
-        first_deposit_date = datetime.utcfromtimestamp(first_time)
+            avg_balance = avg_balance_raw * 10**-6
+
+            first_deposit_date = datetime.utcfromtimestamp(first_time)
+
+            s.first_deposit_date = first_deposit_date
+            s.twab = avg_balance
+            s.reward_earned = avg_balance * 0.05
+            s.program_complete = not(end_of_reward_transaction_index is None)
+            s.save()
+        
 
         actions_completed.append({
             "wallet": s.wallet,
-            "first_deposit_date": first_deposit_date,
-            "time_weighted_average_balance": f"{avg_balance}",
-            "reward_earned": f"{avg_balance * 0.05}",
-            "program_complete": True if end_of_reward_transaction_index else False
+            "first_deposit_date": s.first_deposit_date,
+            "time_weighted_average_balance": f"{s.twab}",
+            "reward_earned": f"{s.reward_earned}",
+            "program_complete": "Yes" if s.program_complete else "No"
         })
 
     if len(ReferralLinkSignup.objects.all()) > 0:
@@ -150,22 +161,24 @@ def make_twab_table(transactions, wallet):
   current_time = 0
 
   thirty_day_mark = int(transactions[0]["timeStamp"]) + (30 * 86400)
-  transactions.append({
-    "timeStamp": f"{thirty_day_mark}",
-    "value":0,
-    "to": "0x",
-    "from": "0x",
-    "is_reward_end": True
-  })
-  transactions.sort(key=get_timestamp)
+  if int(transactions[-1]["timeStamp"]) > thirty_day_mark:
+    transactions.append({
+        "timeStamp": f"{thirty_day_mark}",
+        "value":0,
+        "to": "0x",
+        "from": "0x",
+        "is_reward_end": True
+    })
+    transactions.sort(key=get_timestamp)
 
   for transaction in transactions:
     current_time = int(transaction["timeStamp"])
     new_twab_amount = last_twab_amount + current_balance * (current_time - last_twab_time)
-    
-    twab_table.append({"time": current_time, "twab_amount":new_twab_amount})
+
+    current_balance = current_balance + convert_transaction_to_signed_amount(transaction, wallet)  
   
-    current_balance = current_balance + convert_transaction_to_signed_amount(transaction, wallet)
+    twab_table.append({"time": current_time, "twab_amount":new_twab_amount, "current_balance": current_balance})
+  
     last_twab_amount = new_twab_amount
     last_twab_time = current_time
   return twab_table
